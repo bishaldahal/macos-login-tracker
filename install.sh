@@ -56,6 +56,15 @@ else
     exit 1
 fi
 
+# Download the script
+print_color $YELLOW "Downloading login tracker script..."
+if curl -fsSL "$REPO_URL/$SCRIPT_NAME" -o "$INSTALL_DIR/$SCRIPT_NAME"; then
+    print_color $GREEN "✓ Successfully downloaded $SCRIPT_NAME"
+else
+    print_color $RED "✗ Failed to download script"
+    exit 1
+fi
+
 # Make it executable
 chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
 print_color $GREEN "✓ Made script executable"
@@ -66,82 +75,73 @@ if [ ! -f "$INSTALL_DIR/$SYMLINK_NAME" ]; then
     print_color $GREEN "✓ Created symlink: $SYMLINK_NAME"
 fi
 
-# Check if install directory is in PATH
+# Auto-configure PATH if needed
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-    print_color $YELLOW "⚠ Installation directory is not in your PATH"
-    echo ""
-    print_color $BLUE "To add it to your PATH, add this line to your shell profile:"
-    echo "export PATH=\"\$PATH:$INSTALL_DIR\""
-    echo ""
-    print_color $BLUE "For zsh (default on macOS), add to ~/.zshrc:"
-    echo "echo 'export PATH=\"\$PATH:$INSTALL_DIR\"' >> ~/.zshrc"
-    echo "source ~/.zshrc"
-    echo ""
-    print_color $BLUE "For bash, add to ~/.bash_profile:"
-    echo "echo 'export PATH=\"\$PATH:$INSTALL_DIR\"' >> ~/.bash_profile"
-    echo "source ~/.bash_profile"
-    echo ""
+    print_color $YELLOW "Adding $INSTALL_DIR to your PATH..."
+    
+    # Detect shell and appropriate config file
+    if [[ "$SHELL" == *"zsh"* ]] || [[ -n "$ZSH_VERSION" ]]; then
+        SHELL_CONFIG="$HOME/.zshrc"
+        SHELL_NAME="zsh"
+    elif [[ "$SHELL" == *"bash"* ]] || [[ -n "$BASH_VERSION" ]]; then
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            SHELL_CONFIG="$HOME/.bash_profile"
+        else
+            SHELL_CONFIG="$HOME/.bashrc"
+        fi
+        SHELL_NAME="bash"
+    else
+        SHELL_CONFIG="$HOME/.profile"
+        SHELL_NAME="shell"
+    fi
+    
+    # Create config file if it doesn't exist
+    touch "$SHELL_CONFIG"
+    
+    # Check if PATH export already exists
+    if ! grep -q "export PATH.*$INSTALL_DIR" "$SHELL_CONFIG" 2>/dev/null; then
+        echo "" >> "$SHELL_CONFIG"
+        echo "# Added by macOS Login Tracker installer" >> "$SHELL_CONFIG"
+        echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> "$SHELL_CONFIG"
+        print_color $GREEN "✓ Added $INSTALL_DIR to $SHELL_CONFIG"
+        
+        # Source the config for current session
+        export PATH="$PATH:$INSTALL_DIR"
+        print_color $GREEN "✓ PATH updated for current session"
+        
+        print_color $BLUE "💡 To use in new terminal sessions, restart your terminal or run:"
+        print_color $BLUE "   source $SHELL_CONFIG"
+    else
+        print_color $YELLOW "⚠ PATH entry already exists in $SHELL_CONFIG"
+    fi
+else
+    print_color $GREEN "✓ Installation directory already in PATH"
 fi
 
 # Test the installation
-if [ "$UPDATE_MODE" = true ]; then
-    print_color $YELLOW "Testing update..."
-else
-    print_color $YELLOW "Testing installation..."
-fi
-
+print_color $YELLOW "Testing installation..."
 if "$INSTALL_DIR/$SCRIPT_NAME" --help &>/dev/null; then
-    if [ "$UPDATE_MODE" = true ]; then
-        print_color $GREEN "✓ Update successful!"
-    else
-        print_color $GREEN "✓ Installation successful!"
-    fi
+    print_color $GREEN "✓ Installation successful!"
 else
-    if [ "$UPDATE_MODE" = true ]; then
-        print_color $RED "✗ Update test failed"
-    else
-        print_color $RED "✗ Installation test failed"
-    fi
+    print_color $RED "✗ Installation test failed"
     exit 1
 fi
 
 echo ""
-if [ "$UPDATE_MODE" = true ]; then
-    print_color $GREEN "🎉 Update Complete!"
-    echo ""
-    print_color $BLUE "Your login tracker has been updated to the latest version."
-    echo ""
-    print_color $BLUE "To check the version:"
-    if [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
-        echo "  $SYMLINK_NAME --help"
-    else
-        echo "  $INSTALL_DIR/$SYMLINK_NAME --help"
-    fi
-else
-    print_color $GREEN "🎉 Installation Complete!"
-    echo ""
-    print_color $BLUE "Usage:"
-    if [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
-        echo "  $SYMLINK_NAME                    # Default: last 30 days"
-        echo "  $SYMLINK_NAME -d 7               # Last 7 days"
-        echo "  $SYMLINK_NAME -o report.csv      # Custom output file"
-        echo "  $SYMLINK_NAME --help             # Show help"
-    else
-        echo "  $INSTALL_DIR/$SYMLINK_NAME                    # Default: last 30 days"
-        echo "  $INSTALL_DIR/$SYMLINK_NAME -d 7               # Last 7 days"
-        echo "  $INSTALL_DIR/$SYMLINK_NAME -o report.csv      # Custom output file"
-        echo "  $INSTALL_DIR/$SYMLINK_NAME --help             # Show help"
-    fi
-    echo ""
-    print_color $BLUE "Example - Generate a weekly report:"
-    if [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
-        echo "  $SYMLINK_NAME -d 7 -o weekly_report.csv"
-    else
-        echo "  $INSTALL_DIR/$SYMLINK_NAME -d 7 -o weekly_report.csv"
-    fi
-    echo ""
-    print_color $BLUE "To update to the latest version in the future:"
-    echo "  curl -fsSL https://raw.githubusercontent.com/bishaldahal/macos-login-tracker/main/install.sh | bash -s -- --update"
-fi
+print_color $GREEN "🎉 Installation Complete!"
+echo ""
+print_color $BLUE "✨ You can now use the login tracker from anywhere:"
+echo ""
+print_color $GREEN "Basic Usage:"
+echo "  $SYMLINK_NAME                    # Analyze last 30 days"
+echo "  $SYMLINK_NAME -d 7               # Analyze last 7 days"
+echo "  $SYMLINK_NAME -o report.csv      # Save to custom file"
+echo "  $SYMLINK_NAME --help             # Show all options"
+echo ""
+print_color $BLUE "📊 Quick Example - Generate a weekly report:"
+echo "  $SYMLINK_NAME -d 7 -o weekly_report.csv"
+echo ""
+print_color $BLUE "🔄 To update to the latest version in the future:"
+echo "  $SYMLINK_NAME --update"
 echo ""
 print_color $GREEN "Happy time tracking! ⏰"
