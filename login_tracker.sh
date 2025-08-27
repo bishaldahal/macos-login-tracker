@@ -305,6 +305,7 @@ show_usage() {
     echo "  -w, --work-hours START:END  Work hours range (default: 9:18)"
     echo "  -u, --user USER     Specific user to analyze (default: current user)"
     echo "  --debug             Enable debug output"
+    echo "  --update            Update to the latest version"
     echo "  -h, --help          Show this help message"
     echo ""
     echo "Examples:"
@@ -312,6 +313,60 @@ show_usage() {
     echo "  $0 -o weekly_report.csv    # Custom output file"
     echo "  $0 -w 8:17                 # Work hours 8 AM to 5 PM"
     echo "  $0 --debug                 # Enable debug mode"
+    echo "  $0 --update                # Update to latest version"
+}
+
+# Function to update the script
+update_script() {
+    print_color $BLUE "macOS Login Tracker - Self Update"
+    print_color $BLUE "================================="
+    echo ""
+    
+    local script_path="$(realpath "$0")"
+    local temp_file="/tmp/login_tracker_update_$$"
+    local backup_file="${script_path}.backup"
+    local repo_url="https://raw.githubusercontent.com/bishaldahal/macos-login-tracker/main/login_tracker.sh"
+    
+    print_color $YELLOW "Downloading latest version..."
+    
+    # Download the latest version
+    if curl -fsSL "$repo_url" -o "$temp_file"; then
+        print_color $GREEN "✓ Successfully downloaded latest version"
+    else
+        print_color $RED "✗ Failed to download update"
+        rm -f "$temp_file"
+        exit 1
+    fi
+    
+    # Backup current version
+    if cp "$script_path" "$backup_file"; then
+        print_color $GREEN "✓ Current version backed up"
+    else
+        print_color $RED "✗ Failed to create backup"
+        rm -f "$temp_file"
+        exit 1
+    fi
+    
+    # Replace current script with new version
+    if mv "$temp_file" "$script_path" 2>/dev/null; then
+        chmod +x "$script_path"
+        print_color $GREEN "✓ Script updated successfully"
+        rm -f "$backup_file"
+    else
+        print_color $RED "✗ Failed to update script"
+        # Restore backup
+        mv "$backup_file" "$script_path" 2>/dev/null
+        rm -f "$temp_file"
+        exit 1
+    fi
+    
+    echo ""
+    print_color $GREEN "🎉 Update Complete!"
+    echo ""
+    print_color $BLUE "Your login tracker has been updated to the latest version."
+    print_color $BLUE "You can now use the updated script with the same commands."
+    echo ""
+    exit 0
 }
 
 # Main function
@@ -343,6 +398,9 @@ main() {
             --debug)
                 DEBUG=true
                 shift
+                ;;
+            --update)
+                update_script
                 ;;
             -h|--help)
                 show_usage
