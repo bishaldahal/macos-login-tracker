@@ -322,7 +322,12 @@ process_date_sessions() {
     
     # If no sessions found, return empty values
     if [ $session_count -eq 0 ]; then
-        echo "$date,No Activity,No Activity,,0:00"
+        local day_name=$(date -j -f "%Y-%m-%d" "$date" "+%a" 2>/dev/null || echo "")
+        local date_with_day="$date"
+        if [ -n "$day_name" ]; then
+            date_with_day="$date ($day_name)"
+        fi
+        echo "$date_with_day,No Activity,No Activity,,0:00"
         return
     fi
     
@@ -426,7 +431,14 @@ process_date_sessions() {
     fi
     if [ -z "$intermediate_sessions" ]; then intermediate_sessions="None"; fi
     
-    echo "$date,$first_login,$actual_last_logout,$intermediate_sessions,$total_hours_str"
+    # Get day of week for the date
+    local day_name=$(date -j -f "%Y-%m-%d" "$date" "+%a" 2>/dev/null || echo "")
+    local date_with_day="$date"
+    if [ -n "$day_name" ]; then
+        date_with_day="$date ($day_name)"
+    fi
+    
+    echo "$date_with_day,$first_login,$actual_last_logout,$intermediate_sessions,$total_hours_str"
 }
 
 # Function to show usage
