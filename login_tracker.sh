@@ -11,6 +11,7 @@ WORK_END_HOUR=18     # 6:00 PM
 OUTPUT_FILE="login_report_$(date +%Y%m%d).csv"
 TEMP_FILE="/tmp/last_output_$$"
 DEBUG=false
+AUTO_OPEN=true       # Auto-open CSV file after generation
 
 # Colors for output
 RED='\033[0;31m'
@@ -305,6 +306,7 @@ show_usage() {
     echo "  -w, --work-hours START:END  Work hours range (default: 9:18)"
     echo "  -u, --user USER     Specific user to analyze (default: current user)"
     echo "  --debug             Enable debug output"
+    echo "  --no-open           Don't auto-open CSV file after generation"
     echo "  --update            Update to the latest version"
     echo "  -h, --help          Show this help message"
     echo ""
@@ -313,6 +315,7 @@ show_usage() {
     echo "  $0 -o weekly_report.csv    # Custom output file"
     echo "  $0 -w 8:17                 # Work hours 8 AM to 5 PM"
     echo "  $0 --debug                 # Enable debug mode"
+    echo "  $0 --no-open               # Generate report but don't open it"
     echo "  $0 --update                # Update to latest version"
 }
 
@@ -397,6 +400,10 @@ main() {
                 ;;
             --debug)
                 DEBUG=true
+                shift
+                ;;
+            --no-open)
+                AUTO_OPEN=false
                 shift
                 ;;
             --update)
@@ -546,6 +553,23 @@ main() {
     
     echo ""
     print_color $GREEN "Report saved to: $OUTPUT_FILE"
+    
+    # Auto-open CSV file with default application (if enabled)
+    if [ "$AUTO_OPEN" = true ]; then
+        if command -v open &> /dev/null; then
+            print_color $BLUE "Opening CSV file with default application..."
+            if open "$OUTPUT_FILE" 2>/dev/null; then
+                print_color $GREEN "✓ CSV file opened successfully"
+            else
+                print_color $YELLOW "⚠ Could not auto-open CSV file"
+                print_color $BLUE "You can manually open: $OUTPUT_FILE"
+            fi
+        else
+            print_color $BLUE "To view the report, open: $OUTPUT_FILE"
+        fi
+    else
+        print_color $BLUE "To view the report, open: $OUTPUT_FILE"
+    fi
 }
 
 # Error handling
