@@ -58,9 +58,40 @@ time_to_minutes() {
 # Function to convert minutes to HH:MM format
 minutes_to_time() {
     local total_minutes=$1
+    
+    # Handle day overflow - if minutes exceed 24 hours, wrap to next day
+    total_minutes=$((total_minutes % 1440))  # 1440 minutes = 24 hours
+    
     local hours=$((total_minutes / 60))
     local minutes=$((total_minutes % 60))
     printf "%02d:%02d" $hours $minutes
+}
+
+# Function to validate if a logout time is realistic
+validate_logout_time() {
+    local logout_time="$1"
+    local login_time="$2"
+    
+    # If logout time is empty or already marked as special, return as-is
+    if [ -z "$logout_time" ] || [ "$logout_time" = "ongoing" ] || [ "$logout_time" = "unknown" ]; then
+        echo "$logout_time"
+        return
+    fi
+    
+    # Extract hour from logout time
+    local logout_hour=$(echo "$logout_time" | cut -d':' -f1)
+    local login_hour=$(echo "$login_time" | cut -d':' -f1)
+    
+    # Convert to numbers (remove leading zeros)
+    logout_hour=$((10#$logout_hour))
+    login_hour=$((10#$login_hour))
+    
+    # Check if logout time is unrealistic (after 8 PM or before login time in same day)
+    if [ $logout_hour -gt 20 ] || ([ $logout_hour -lt $login_hour ] && [ $logout_hour -lt 6 ]); then
+        echo "unknown"
+    else
+        echo "$logout_time"
+    fi
 }
 
 # Function to calculate duration between two times in minutes
@@ -137,7 +168,7 @@ extract_times() {
         # Extract both login and logout times
         if [[ $line =~ ([0-9]{1,2}:[0-9]{2})[[:space:]]*-[[:space:]]*([0-9]{1,2}:[0-9]{2}) ]]; then
             login_time="${BASH_REMATCH[1]}"
-            logout_time="${BASH_REMATCH[2]}"
+            logout_time=$(validate_logout_time "${BASH_REMATCH[2]}" "$login_time")
             status="completed"
         fi
     # Pattern for ongoing sessions: "Tue Aug 26 09:30 still logged in"
@@ -146,6 +177,35 @@ extract_times() {
         logout_time=""
         status="ongoing"
     # Pattern for crashed sessions: "Tue Aug 26 09:30 - crash (01:00)"
+    elif [[ $line =~ ([0-9]{1,2}:[0-9]{2})[[:space:]]*-[[:space:]]*crash[[:space:]]*\(([0-9]{2}:[0-9]{2})\) ]]; then
+        login_time="${BASH_REMATCH[1]}"
+        local crash_duration="${BASH_REMATCH[2]}"
+        # Calculate actual crash time by adding duration to login time
+        local login_minutes=$(time_to_minutes "$login_time")
+        local duration_parts=(${crash_duration//:/ })
+        # Remove leading zeros to avoid octal interpretation
+        local duration_hours=$((10#${duration_parts[0]}))
+        local duration_mins=$((10#${duration_parts[1]}))
+        local duration_minutes=$((duration_hours * 60 + duration_mins))
+        local crash_time_minutes=$((login_minutes + duration_minutes))
+        
+        # Check if crash time is realistic
+        if [ $crash_time_minutes -ge 1440 ]; then
+            # If crash extends beyond midnight, mark as unknown
+            logout_time="unknown"
+        else
+            local calculated_logout=$(minutes_to_time $crash_time_minutes)
+            local logout_hour=$(echo "$calculated_logout" | cut -d':' -f1)
+            
+            # If logout time is after 20:00 (8 PM), consider it unrealistic for normal work
+            if [ $((10#$logout_hour)) -gt 20 ]; then
+                logout_time="unknown"
+            else
+                logout_time="$calculated_logout"
+            fi
+        fi
+        status="crashed"
+    # Pattern for crashed sessions without duration: "Tue Aug 26 09:30 - crash"
     elif [[ $line =~ ([0-9]{1,2}:[0-9]{2})[[:space:]]*-[[:space:]]*crash ]]; then
         login_time="${BASH_REMATCH[1]}"
         logout_time=""
@@ -153,7 +213,7 @@ extract_times() {
     # Pattern for zero-duration sessions: "Tue Aug 26 09:30 - 09:30 (00:00)"
     elif [[ $line =~ ([0-9]{1,2}:[0-9]{2})[[:space:]]*-[[:space:]]*([0-9]{1,2}:[0-9]{2})[[:space:]]*\(00:00\) ]]; then
         login_time="${BASH_REMATCH[1]}"
-        logout_time="${BASH_REMATCH[2]}"
+        logout_time=$(validate_logout_time "${BASH_REMATCH[2]}" "$login_time")
         status="zero_duration"
     # Pattern for simple time entry: "Tue Aug 26 09:30"
     elif [[ $line =~ ([0-9]{1,2}:[0-9]{2}) ]]; then
@@ -211,12 +271,20 @@ process_date_sessions() {
                 actual_last_logout="ongoing"
                 ;;
             "crashed"|"simple")
-                # For crashed sessions, estimate end time as 1 hour after login
-                local crash_end_minutes=$(time_to_minutes "$login_time")
-                crash_end_minutes=$((crash_end_minutes + 60))
-                last_logout_time=$(minutes_to_time $crash_end_minutes)
-                if [ -z "$actual_last_logout" ] || [ "$actual_last_logout" = "ongoing" ]; then
-                    actual_last_logout="$login_time(est)"
+                # For crashed sessions with known duration, use actual crash time
+                if [ -n "$logout_time" ]; then
+                    last_logout_time="$logout_time"
+                    if [ -z "$actual_last_logout" ] || [ "$actual_last_logout" = "ongoing" ]; then
+                        actual_last_logout="$logout_time"
+                    fi
+                else
+                    # For crashed sessions without duration, estimate end time as 1 hour after login
+                    local crash_end_minutes=$(time_to_minutes "$login_time")
+                    crash_end_minutes=$((crash_end_minutes + 60))
+                    last_logout_time=$(minutes_to_time $crash_end_minutes)
+                    if [ -z "$actual_last_logout" ] || [ "$actual_last_logout" = "ongoing" ]; then
+                        actual_last_logout="$login_time(est)"
+                    fi
                 fi
                 ;;
         esac
@@ -260,9 +328,10 @@ process_date_sessions() {
     
     # Calculate total working hours from first login to last logout
     local total_minutes=0
-    local total_hours_str="0:00"
+    local total_hours_str="unknown"
     
-    if [ -n "$first_login" ] && [ -n "$last_logout" ]; then
+    # Check if we have valid data to calculate working hours
+    if [ -n "$first_login" ] && [ -n "$last_logout" ] && [ "$actual_last_logout" != "unknown" ]; then
         if [ "$actual_last_logout" = "ongoing" ]; then
             # Calculate from first login to current time
             local current_time=$(date +%H:%M)
@@ -271,16 +340,79 @@ process_date_sessions() {
         elif [[ "$actual_last_logout" =~ \(est\) ]]; then
             # Handle estimated end times
             local est_time=$(echo "$actual_last_logout" | sed 's/(est)//')
-            total_minutes=$(calculate_duration "$first_login" "$est_time")
-            # Add 1 hour for estimated crash duration
-            total_minutes=$((total_minutes + 60))
-            total_hours_str=$(minutes_to_time $total_minutes)
+            
+            # Check if estimated time is same as login time (indicates immediate crash)
+            if [ "$first_login" = "$est_time" ]; then
+                # Look for last valid login time from intermediate sessions
+                local last_login_time="$first_login"
+                if [ -n "$intermediate_sessions" ] && [ "$intermediate_sessions" != "None" ]; then
+                    local all_login_times=$(echo "$intermediate_sessions" | grep -o '[0-9]\{1,2\}:[0-9]\{2\}-' | sed 's/-$//' | tail -1)
+                    if [ -n "$all_login_times" ]; then
+                        last_login_time="$all_login_times"
+                    fi
+                fi
+                
+                # Use last login time as proxy logout (no additional time added)
+                if [ "$last_login_time" != "$first_login" ]; then
+                    total_minutes=$(calculate_duration "$first_login" "$last_login_time")
+                    # Update actual_last_logout to show the last login time as proxy
+                    actual_last_logout="$last_login_time"
+                else
+                    total_minutes=0  # Same time, no duration
+                fi
+                total_hours_str="$(minutes_to_time $total_minutes)+"
+            else
+                total_minutes=$(calculate_duration "$first_login" "$est_time")
+                # Add 1 hour for estimated crash duration
+                total_minutes=$((total_minutes + 60))
+                total_hours_str=$(minutes_to_time $total_minutes)
+            fi
         else
             # Normal case: calculate from first login to last logout
             total_minutes=$(calculate_duration "$first_login" "$last_logout")
-            total_hours_str=$(minutes_to_time $total_minutes)
+            
+            # Validate the calculated time - if same login/logout time, mark as invalid
+            if [ "$first_login" = "$last_logout" ] || [ $total_minutes -le 0 ]; then
+                total_hours_str="0:00"
+                debug_log "Same login/logout time detected for $date: $first_login"
+            else
+                total_hours_str=$(minutes_to_time $total_minutes)
+            fi
         fi
+    elif [ -n "$first_login" ] && [ "$actual_last_logout" = "unknown" ]; then
+        # When logout is unknown but we have login data, use last login time as proxy logout
+        # Find the last login time from intermediate sessions
+        local last_login_time="$first_login"
+        if [ -n "$intermediate_sessions" ] && [ "$intermediate_sessions" != "None" ]; then
+            # Extract all login times from intermediate sessions (look for times before dashes)
+            local all_login_times=$(echo "$intermediate_sessions" | grep -o '[0-9]\{1,2\}:[0-9]\{2\}-' | sed 's/-$//' | tail -1)
+            if [ -n "$all_login_times" ]; then
+                last_login_time="$all_login_times"
+            fi
+        fi
+        
+        # Use last login time as proxy logout time (treating it as minimum work duration)
+        total_minutes=$(calculate_duration "$first_login" "$last_login_time")
+        
+        # Update actual_last_logout to show the last login time as proxy
+        if [ "$last_login_time" != "$first_login" ]; then
+            actual_last_logout="$last_login_time"
+        fi
+        
+        # Add "+" to indicate this is an estimated minimum based on last login time
+        if [ $total_minutes -gt 0 ]; then
+            total_hours_str="$(minutes_to_time $total_minutes)+"
+        else
+            # If same time or invalid, show 0:00+
+            total_hours_str="0:00+"
+        fi
+        
+        debug_log "Using last login time ($last_login_time) as proxy logout for $date"
+    elif [ -z "$first_login" ] || [ -z "$last_logout" ]; then
+        # No login/logout data available
+        total_hours_str="0:00"
     fi
+    # If actual_last_logout is "unknown", total_hours_str remains "unknown"
     
     # Clean up intermediate sessions for single session days
     if [ $session_count -eq 1 ] && [[ ! "$intermediate_sessions" =~ (ongoing|crashed) ]]; then
